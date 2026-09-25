@@ -432,7 +432,7 @@ def get_datasets_from_frame(
     test_frame: pd.DataFrame,
     *,
     device: str,
-    feat_type: Literal["integer", "onehot", "t5"] = "integer",
+    feat_type: Literal["integer", "onehot", "t5", "esmc"] = "integer",
     graph: bool = False,
     graph_sequence_window_size: int = 10,
     graph_n_distance_feats: int = 10,
@@ -458,11 +458,12 @@ def get_datasets_from_frame(
 
     """
 
-    if feat_type not in ("integer", "onehot", "t5"):
-        raise ValueError("Only integer, onehot, or t5 featurization is supported.")
+    if feat_type not in ("integer", "onehot", "t5", "esmc"):
+        raise ValueError("Only integer, onehot, esmc or t5 featurization is supported.")
 
     if whiten is None:
-        whiten = feat_type == "t5"
+        #whiten = feat_type in ("t5")
+        whiten = feat_type in ("t5","esmc")
 
     if whiten:
         post_transform: SKT_protocol = Whiten()
@@ -627,6 +628,13 @@ def _process_table(
         from .featurize.t5 import T5EncoderWrapper
 
         enc = T5EncoderWrapper(
+            integer_encoder=int_encoder, device=device, per_protein=True
+        )
+        encoded = enc.batch_encode(int_encoded).cpu()
+    elif feat_type == "esmc":
+        from .featurize.esmc import ESMCEncoderWrapper
+
+        enc = ESMCEncoderWrapper(
             integer_encoder=int_encoder, device=device, per_protein=True
         )
         encoded = enc.batch_encode(int_encoded).cpu()

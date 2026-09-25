@@ -4,7 +4,7 @@ from typing import Final, List, Optional, Sequence, Iterable, TypeVar
 from .core import IntEncoder, get_default_int_encoder
 from torch import Tensor
 
-from transformers import T5Tokenizer, T5EncoderModel  # type:ignore
+from transformers import AutoModel, AutoTokenizer
 import torch
 
 T = TypeVar("T")
@@ -21,7 +21,7 @@ def chunks(inp: Sequence[T], n: int) -> Iterable[Sequence[T]]:
         yield inp[i:(i + n)]
 
 
-class T5EncoderWrapper:
+class ESMCEncoderWrapper:
     """Featurizer acting on integer encoded sequences.
 
     Note that this wrapping is not optimized, and may be slow for each encoding
@@ -29,7 +29,7 @@ class T5EncoderWrapper:
 
     """
 
-    T5_huggingface_name: Final = "Rostlab/prot_t5_xl_half_uniref50-enc"
+    ESMC_huggingface_name: Final = "biohub/ESMC-600M-hf"
 
     def __init__(
         self,
@@ -53,11 +53,11 @@ class T5EncoderWrapper:
         flatten:
             If per_protein is True, ignored. Else, if true, we return a matrix
             of shape (b, f) for batched input. Otherwise, the returned values
-            are organized by sequence (with an additional entry), shape (b,
-            n_res+1, 1024)
+            are organized by sequence, shape (b,
+            n_res, 1152)
         per_protein:
             If True, we average over all residues in each sample to produce a single
-            1024-sized vector. Setting this to False keeps embeddings separate per
+            1152-sized vector. Setting this to False keeps embeddings separate per
             amino acid. False is more expressive but may have a massive memory
             footprint.
         batch_size:
@@ -69,14 +69,10 @@ class T5EncoderWrapper:
             integer_encoder = get_default_int_encoder()
         self.device = device
         self.flatten = flatten
-        self.tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained(  # type: ignore[reportUnknownMemberType]
-            self.T5_huggingface_name, do_lower_case=False
-        )
+        self.tokenizer= AutoTokenizer.from_pretrained(self.ESMC_huggingface_name)
 
         # Load the model
-        #self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name).to(device)  # type: ignore[no-any-return]
-        #self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True,torch_dtype=torch.float32).to(device)  # type: ignore[no-any-return]
-        self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True).to(device)  # type: ignore[no-any-return]
+        self.esmc = AutoModel.from_pretrained(self.ESMC_huggingface_name).to(device)
         self.integer_encoder = integer_encoder
         self.per_protein = per_protein
         self.batch_size = batch_size
@@ -97,24 +93,22 @@ class T5EncoderWrapper:
 
         """
         str_features = self.integer_encoder.batch_decode(int_encoded)
-        formatted = [" ".join(x) for x in str_features]
-        ids = self.tokenizer(formatted, add_special_tokens=True)
-        input_ids = torch.tensor(ids["input_ids"]).to(self.device)
-        attention_mask = torch.tensor(ids["attention_mask"]).to(self.device)
+        inputs = self.tokenizer(str_features, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # generate embeddings
         with torch.no_grad():
-            embedding_repr = self.t5(input_ids=input_ids, attention_mask=attention_mask)
+            embedding_repr = self.esmc(**inputs)
 
         emb: Tensor = embedding_repr.last_hidden_state
 
         if self.per_protein:
             # average over residues, not batch examples
-            return emb.mean(dim=1)
+            return emb[:,1:-1,:].mean(dim=1)
         elif self.flatten:
-            return emb.flatten(start_dim=1)
+            return emb[:,1:-1,:].flatten(start_dim=1)
         else:
-            return emb
+            return emb[:,1:-1,:]
 
     def batch_encode(self, int_encoded: Tensor) -> Tensor:
         """Encode iterable of sequences.
