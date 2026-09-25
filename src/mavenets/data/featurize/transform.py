@@ -11,6 +11,21 @@ from typing import Protocol
 from torch import Tensor, flatten, no_grad, clamp
 
 
+## -------------------------------------  Notes ----------------------------------------(1)
+# SKT_protocol:
+# typing/interface only, no actual transformation.
+# Any transform object should provide:
+#
+# fit(data) -> None
+#   learn preprocessing parameters from data
+#
+# transform(data) -> Tensor
+#   apply the learned preprocessing to data
+#
+# Actual implementations:
+# Whiten / NullTransform
+
+
 class SKT_protocol(Protocol):
     """Protocol representing sklearn-style transform.
 
@@ -37,6 +52,13 @@ class SKT_protocol(Protocol):
         """Fit settings of transform on sample data."""
         ...
 
+
+
+## -------------------------------------  Notes ----------------------------------------(2)
+#1.Purpose: provide simple preprocessing transforms using sklearn-style fit()/transform() interface, but operating on PyTorch tensors.
+#2.Whiten: calculate mean/std from train → Z-score standardize data (first fit, then transform)
+#3.NullTransform: do nothing → keep data unchanged
+#4.直接apply train的mean/std给val and test，因为防止data leakage
 
 class Whiten:
     """Perform component-wise whitening calculated across a dataset."""

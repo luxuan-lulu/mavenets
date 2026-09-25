@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 # Eager imports for modules without heavy dependencies
 from .spec import (
+    create_dataspec, # noqa: F401         ##added by LW
     resolve_dataspec,  # noqa: F401
     DataSpec,  # noqa: F401
     MAX_DATASPEC_INDEX,  # noqa: F401

@@ -30,6 +30,7 @@ from .featurize import (
     NullTransform,
 )
 from .graph import get_graph
+from .split import random_split, split_by_mutation_num
 
 # column names for labeling loaded MAVE experiment csvs.
 CSV_RID_CNAME: Final = "seq_id"
@@ -53,6 +54,23 @@ class SizedDataset(Protocol[_T_co]):
         """Return the item at the given index."""
         ...
 
+
+## -------------------------------------  Notes ----------------------------------------()
+#1. SequenceDataset 是一个 wrapper: 它把已经存在的 PyTorch Dataset 包起来，同时额外保存 raw amino-acid sequences。
+#2. It stores two main things:
+#   _dataset
+#       -> 原来的 dataset
+#       -> e.g. TensorDataset(features, signals, exp_ids)
+#
+#   _sequences
+#       -> 对应每个 sample 的 raw protein sequence
+#       -> e.g. ("ACDEF...", "GHIKL...", ...)
+#3. Usage: 
+# len(seq_dataset) -> sample 数量
+# seq_dataset[i] -> 原 dataset 的第 i 个 sample -> (feature, signal, exp_id)
+# seq_dataset.get_sequence(i) -> 第 i 条 raw sequence
+# seq_dataset.sequences -> 所有 raw sequences
+# seq_dataset.dataset -> 原来的 underlying dataset
 
 class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
     """Wrapper dataset that adds sequence access to an underlying dataset.
@@ -233,6 +251,10 @@ class DNSEDataset(Dataset):
         return data
 
 
+## -------------------------------------  Notes ----------------------------------------()
+#1. will be used in the next function named: _get_aggregate_mave_csv
+#2. read one headerless MAVE CSV and label its three columns as seq_id, sequence, and signal.
+
 # applies column names solely based on column order.
 def _mave_csv_read(f: Path) -> pd.DataFrame:
     """Read csv files of a given format from disk and label columns.
@@ -246,6 +268,10 @@ def _mave_csv_read(f: Path) -> pd.DataFrame:
     frame.columns = [CSV_RID_CNAME, SEQ_CNAME, SIGNAL_CNAME]
     return frame
 
+
+## -------------------------------------  Notes ----------------------------------------()
+#1. resolve_dataspec 在spec.py define, convert int, str, Datasepc to Dataspec
+#2. 得到Dataspec, 从中的identifier提取文件名称，利用上面定义的_mave_csv_read 读取csv file, 转成三列column，然后外加一个experiment index defined in Dataspec 然后把多个csv concat成一个df
 
 def _get_aggregate_mave_csv(
     specs: Union[Iterable[int], Iterable[str], Iterable[DataSpec]],
@@ -281,6 +307,290 @@ def _get_aggregate_mave_csv(
     return pd.concat(frames)
 
 
+## -------------------------------------  Notes ----------------------------------------()
+
+def _standardize_columns(
+    frame: pd.DataFrame,
+    id_col: str,
+    sequence_col: str,
+    signal_col: str,
+) -> pd.DataFrame:
+    return frame.rename(
+        columns={
+            id_col: CSV_RID_CNAME,
+            sequence_col: SEQ_CNAME,
+            signal_col: SIGNAL_CNAME,
+        }
+    )
+
+
+## -------------------------------------  Notes ----------------------------------------()
+
+def _get_data_frames(
+    *,
+    # raw data path
+    frame: Optional[pd.DataFrame] = None,
+    frame_path: Optional[Path] = None,
+    id_col: Optional[str] = None,
+    sequence_col: Optional[str] = None,
+    signal_col: Optional[str] = None,
+    split_type: Optional[str] = None,
+    split_kwargs: Optional[dict] = None,
+    # already-split CSV path
+    train_path: Optional[Path] = None,
+    valid_path: Optional[Path] = None,
+    test_path: Optional[Path] = None,
+)-> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Get train, validation, and test DataFrames."""
+
+    # Check which input mode is being used
+    has_raw_input = frame is not None or frame_path is not None
+    has_split_input = (
+        train_path is not None
+        or valid_path is not None
+        or test_path is not None
+    )
+
+    # Raw data and pre-split data cannot be provided together
+    if has_raw_input and has_split_input:
+        raise ValueError(
+            "Provide either raw data or already-split CSV files, not both."
+        )
+
+    # 1. Raw CSV -> DataFrame
+    if frame is not None and frame_path is not None:
+        raise ValueError("Provide either frame or frame_path, not both.")
+
+    if frame_path is not None:
+        frame = pd.read_csv(frame_path)
+
+    # 2. Raw DataFrame -> split.py
+    if frame is not None:
+
+        if id_col is None or sequence_col is None or signal_col is None:
+            raise ValueError(
+                "id_col, sequence_col, and signal_col are required "
+                "when loading raw data."
+            )
+
+        split_kwargs = split_kwargs or {}
+
+        if split_type == "random":
+            train_frame, valid_frame, test_frame = random_split(
+                frame,
+                id_col=id_col,
+                sequence_col=sequence_col,
+                signal_col=signal_col,
+                **split_kwargs,
+            )
+
+        elif split_type == "mutation_num":
+            train_frame, valid_frame, test_frame = split_by_mutation_num(
+                frame,
+                id_col=id_col,
+                sequence_col=sequence_col,
+                signal_col=signal_col,
+                **split_kwargs,
+            )
+
+        else:
+            raise ValueError(
+                "split_type must be 'random' or 'mutation_num'."
+            )
+
+        # Convert raw column names -> MAVENets standard names
+        train_frame = _standardize_columns(
+            train_frame, id_col, sequence_col, signal_col
+        )
+        valid_frame = _standardize_columns(
+            valid_frame, id_col, sequence_col, signal_col
+        )
+        test_frame = _standardize_columns(
+            test_frame, id_col, sequence_col, signal_col
+        )
+
+        return train_frame, valid_frame, test_frame
+
+    # 3. Already-split CSV files
+    if train_path is not None and valid_path is not None and test_path is not None:
+        return (
+            _mave_csv_read(train_path),
+            _mave_csv_read(valid_path),
+            _mave_csv_read(test_path),
+        )
+
+    raise ValueError(
+        "Provide raw data (frame/frame_path) or "
+        "train_path, valid_path, and test_path."
+    )
+
+
+## -------------------------------------  Notes ----------------------------------------()
+def get_datasets_from_frame(
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    *,
+    device: str,
+    feat_type: Literal["integer", "onehot", "t5"] = "integer",
+    graph: bool = False,
+    graph_sequence_window_size: int = 10,
+    graph_n_distance_feats: int = 10,
+    graph_distance_cutoff: float = 2.5,
+    parent_path: Path = Path(),
+    include_test: bool = False,
+    whiten: Optional[bool] = None,
+) -> Union[
+    Tuple[SequenceDataset, SequenceDataset],
+    Tuple[SequenceDataset, SequenceDataset, SequenceDataset],
+]:
+    """Load, featurize, and return  data for training and evaluation.
+
+    Loads target signal and sequences from disk, and if graph is specified reads
+    a file describing the 3d structure of the protein. If graph is True, the
+    underlying datasets are DNSEDataset instances; else, TensorDatasets are used.
+    All returned datasets are wrapped in SequenceDataset, which provides access
+    to the raw amino acid sequences via the get_sequence() method and sequences
+    property.
+
+    If include_test is True, 3 datasets are returned: train, validation, and test.
+    If False, only train and validation are returned.
+
+    """
+
+    if feat_type not in ("integer", "onehot", "t5"):
+        raise ValueError("Only integer, onehot, or t5 featurization is supported.")
+
+    if whiten is None:
+        whiten = feat_type == "t5"
+
+    if whiten:
+        post_transform: SKT_protocol = Whiten()
+    else:
+        post_transform = NullTransform(copy=False)
+
+    train_frame = train_frame.copy()
+    valid_frame = valid_frame.copy()
+
+    if EXPERIMENT_CNAME not in train_frame.columns:
+        train_frame[EXPERIMENT_CNAME] = 0
+
+    if EXPERIMENT_CNAME not in valid_frame.columns:
+        valid_frame[EXPERIMENT_CNAME] = 0
+
+    all_frames = [train_frame, valid_frame]
+
+    if include_test:
+        test_frame = test_frame.copy()
+        if EXPERIMENT_CNAME not in test_frame.columns:
+            test_frame[EXPERIMENT_CNAME] = 0
+        all_frames.append(test_frame)
+
+    enc = get_default_int_encoder()
+
+    # make sure that there are no amino acids in the data not in our standard
+    # alphabet. We use a standard alphabet to maintain featurization stability
+    # across possibly smaller input datasets.
+    alpha = get_alphabet(pd.concat(all_frames), SEQ_CNAME)
+    if not set(alpha).issubset(set(enc.alphabet)):
+        raise ValueError("Data contains residues not represented fixed alphabet.")
+
+    train_encoded, train_signal, train_dset_id, train_sequences = _process_table(
+        train_frame,
+        feat_type=feat_type,
+        int_encoder=enc,
+        device=device,
+    )
+
+    post_transform.fit(train_encoded)
+    train_encoded = post_transform.transform(train_encoded)
+
+    valid_encoded, valid_signal, valid_dset_id, valid_sequences = _process_table(
+        valid_frame,
+        feat_type=feat_type,
+        int_encoder=enc,
+        device=device,
+    )
+
+    valid_encoded = post_transform.transform(valid_encoded)
+
+    # Initialize test variables - will be set if include_test is True
+    test_base: Optional[SizedDataset[object]] = None
+    test_sequences: Optional[Tuple[str, ...]] = None
+
+    if include_test:
+        test_encoded, test_signal, test_dset_id, test_sequences = _process_table(
+            test_frame,
+            feat_type=feat_type,
+            int_encoder=enc,
+            device=device,
+        )
+        test_encoded = post_transform.transform(test_encoded)
+
+    if graph:
+        edge_labels, edge_features = get_graph(
+            structure=str(parent_path / SARSCOV2_FILENAME),
+            max_cutoff=graph_distance_cutoff,
+            min_cutoff=0.0,
+            num_distance_features=graph_n_distance_feats,
+            window_size=graph_sequence_window_size,
+            node_offset=0,
+        )
+
+        train_base: Dataset = DNSEDataset(
+            edge_attr=edge_features.to(device),
+            edge_index=edge_labels.to(device),
+            x=train_encoded.to(device),
+            y=train_signal.to(device),
+            experiment=train_dset_id.to(device),
+        )
+        valid_base: Dataset = DNSEDataset(
+            edge_attr=edge_features.to(device),
+            edge_index=edge_labels.to(device),
+            x=valid_encoded.to(device),
+            y=valid_signal.to(device),
+            experiment=valid_dset_id.to(device),
+        )
+
+        if include_test:
+            test_base = DNSEDataset(
+                edge_attr=edge_features.to(device),
+                edge_index=edge_labels.to(device),
+                x=test_encoded.to(device),
+                y=test_signal.to(device),
+                experiment=test_dset_id.to(device),
+            )
+    else:
+        train_base = TensorDataset(
+            train_encoded.to(device), train_signal.to(device), train_dset_id.to(device)
+        )
+        valid_base = TensorDataset(
+            valid_encoded.to(device), valid_signal.to(device), valid_dset_id.to(device)
+        )
+        if include_test:
+            test_base = TensorDataset(
+                test_encoded.to(device), test_signal.to(device), test_dset_id.to(device)
+            )
+
+    # Wrap datasets with SequenceDataset to provide sequence access
+    train_dataset: SequenceDataset = SequenceDataset(train_base, train_sequences)
+    valid_dataset: SequenceDataset = SequenceDataset(valid_base, valid_sequences)
+
+    if include_test and test_base is not None and test_sequences is not None:
+        test_dataset: SequenceDataset = SequenceDataset(test_base, test_sequences)
+        return train_dataset, valid_dataset, test_dataset
+
+    return train_dataset, valid_dataset
+
+
+
+## -------------------------------------  Notes ----------------------------------------()
+#1.convert df to embedding and ready for model to learn
+#2.Use IntEncoder.batch_encode() defined in core.py to convert all sequences into integer tensor
+#3.depedning on feat_type to select embedding type (e.g. integer, onehot, t5) Can improve!!!
+#4.Convert signal column to float32 tensor -> prediction target y.
+#5.Convert experiment_index to int32 tensor -> dataset/experiment ID.
+                                                                                            
 def _process_table(
     frame: pd.DataFrame, feat_type: str, int_encoder: IntEncoder, device: str
 ) -> Tuple[Tensor, Tensor, Tensor, Tuple[str, ...]]:
@@ -326,6 +636,14 @@ def _process_table(
     signal = tensor(frame.loc[:, SIGNAL_CNAME].to_numpy(), dtype=float32)
     dset_id = tensor(frame.loc[:, EXPERIMENT_CNAME].to_numpy(), dtype=int32)
     return encoded, signal, dset_id, raw_sequences
+
+
+## -------------------------------------  Notes ----------------------------------------()
+# 1. @overload 只是类型说明，不是真正实现。
+# 2. 作用：
+# 1) include_test=False  -> 返回 (train_dataset, valid_dataset)
+# 2) include_test=True   -> 返回 (train_dataset, valid_dataset, test_dataset)
+# 3) 不传 include_test   -> 默认按 False 处理，返回两个 dataset
 
 
 @overload
@@ -383,6 +701,21 @@ def get_datasets(
     whiten: Optional[bool] = ...,
 ) -> Tuple[SequenceDataset, SequenceDataset]:
     ...
+
+
+## -------------------------------------  Notes ----------------------------------------()
+#1. get_datasets() 把 raw CSV data 读进来、做 sequence embedding, preprocessing，然后包装成可以直接用于 PyTorch training 的 Dataset
+#2. * 的意思是后面的所有参数都必须用（参数名=值）的方式传递
+#3. train/val/test specs: 用DataSpec, int and str来指定到底使用哪些experiments, iterable 意思是遍历所有提供的experiment, 默认等于None也就是CORE_DATA_SPECS
+#4. feat_type 其实是embedding,如果后续improve embedding, 则需要找到这里
+#5. whiten 就是 Z score的standardize，define在tranform.py里面，只有在T5的时候调用
+#6. 真正的code截止到all frames, 就是load train/val/test(if include)的csv and convert to concated df if include lots of dataset once
+#7. _process_table()把df转成integer representation and feat type defined embedding
+#8. whiten/NullTranfrom 决定data的pre-processing
+#9. 根据GNN or not 来创建base dataset：graph=False 就是 TensorDataset(encoded, signal, experiment_id)
+#graph=True:就是DNSEDataset(...)
+#10. 再用 SequenceDataset 包起来: SequenceDataset(base_datset,raw_sequence), 这样既可以用pytorch dataset也可以访问protein sequence
+#11. 最后的输出就是 SequenceDataset wrapper for train/valid/test_dataset
 
 
 def get_datasets(  # noqa: C901

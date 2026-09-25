@@ -3,6 +3,9 @@
 Objects here allow data files to be associated with experiment IDs
 and other data attributes. Routines are provided to conveniently
 query available files.
+
+updated by LW: allow user to create new Dataspec from their own data
+
 """
 
 from typing import Final, Union
@@ -10,6 +13,10 @@ from dataclasses import dataclass, asdict
 from itertools import chain
 from pathlib import Path
 
+## ------------------------  Notes  -------------------------------(1)
+#1. Fixed project-level references / constants.
+#2. Final = type hint meaning "之后不能在assign其他的value了".
+#3. 自己define的名字: Final = 比如path(),比如是一个sequence.
 
 # this file only contains structure for residues 5-187 inclusive
 # this is not yet correctly taken into account in some places.
@@ -26,6 +33,13 @@ SARS_COV2_SEQ: Final = (
 )
 
 
+## ------------------------  Notes  -------------------------------(2)
+#1. @dataclass 就是Python auto-generates的class不用写 __init__, etc.
+#2. 写了一个class叫 Datasepc
+#3. order=True: sortable/comparable
+#4. frozen=True: attributes cannot be changed after creation
+
+
 @dataclass(order=True, frozen=True)
 class DataSpec:
     """Describes all files associated with a given experiment."""
@@ -36,6 +50,32 @@ class DataSpec:
     test_filename: Path  # local path of valid csv
     index: int  # positive unique labeling experiment.
 
+
+
+## ------------------------  Updated Notes  -------------------------------(3)
+def create_dataspec(
+    name: str,  # convienient name labeling the experiment.
+    train_filename: Path,  # local path of train csv
+    valid_filename: Path,  # local path of valid csv
+    test_filename: Path,  # local path of valid csv
+    index: int =0,  # positive unique labeling experiment.
+    ) -> DataSpec:
+    
+    """Create a DataSpec for a user-provided dataset."""
+    return DataSpec(
+        name=name,
+        train_filename=train_filename,
+        valid_filename=valid_filename,
+        test_filename=test_filename,
+        index=index,
+    )
+
+
+
+## ------------------------  Notes  -------------------------------(3)
+#1. List of DataSpec objects; each element describes one experiment.
+#2. Example: CORE_DATA_SPECS[0].name -> "base"
+#3. attribute = object 里存的数据 ; method = object 能执行的函数,就是def的！
 
 CORE_DATA_SPECS: Final = [
     DataSpec(
@@ -173,6 +213,12 @@ DATA_SPECS: Final = CORE_DATA_SPECS + ALT_DATA_SPECS
 
 MAX_DATASPEC_INDEX: Final = max(x.index for x in DATA_SPECS)
 
+
+## ------------------------  Notes  -------------------------------(4)
+#1. define一个新的function: def resolve_dataspec(identifier)
+#2. 而这个identifier可以是str, int, DataSpec 其中一个
+#3. -> 是type annotation, 有或没有都可以！
+
 def resolve_dataspec(identifier: Union[str, int, DataSpec]) -> DataSpec:
     """Return data specification matching name or index.
 
@@ -196,6 +242,9 @@ def resolve_dataspec(identifier: Union[str, int, DataSpec]) -> DataSpec:
     else:
         raise ValueError("No matching DataSpec found.")
 
+
+## ------------------------  Notes  -------------------------------(5)
+#1. Define function to check everything in DATA_SEPCS are unique
 
 def _sanity_check() -> None:
     """Perform basic checks to avoid hard-to-find typographical errors."""

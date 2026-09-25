@@ -45,12 +45,19 @@ BASE_ALPHA: Final = [
     "X",
 ]
 
+## -------------------------------------  Notes ----------------------------------------()
+#1. frame.loc[:, column_name] 把特定的一整个column全部拿出来, 然后return 所有的不重复的作为sorted list
 
 def get_alphabet(frame: pd.DataFrame, column_name: str) -> List[str]:
     """Return all possible letters."""
     column_values = cast(List[str], list(frame.loc[:, column_name]))  # type: ignore[arg-type]
     return sorted(set("".join(column_values)))
 
+## -------------------------------------  Notes ----------------------------------------()
+#1. Create amino-acid <-> integer lookup dictionaries. (enumerate就是给他assign一个index)
+#2. encoder: residue -> index  {"A" : 0,...}
+#3. decoder: index -> residue  {"0" : A,...}
+#4. Sanity check that the encoder and decoder are exact inverses using SARS_COV2_SEQ
 
 def encoder_dict(alphabet: List[str]) -> Dict[str, int]:
     """Create encoder dictionary.
@@ -134,6 +141,13 @@ class _p_decode(Protocol):
     ) -> str:
         ...
 
+
+## -------------------------------------  Notes ----------------------------------------()
+#1.把 amino-acid sequence 在string 和 integer representation 之间转换
+#2.根据之前定义的BASE_ALPHA 以及encode_map/decode_map来建立两个loop up table
+#3._encode/_decode就可以根据table来转化一个sequence
+#4.batch_encode/batch_decode可以把所有的sequence stack在一起
+#5.并且可以查看alphabet的length
 
 class IntEncoder:
     """Encodes strings as integer lists or tensors."""
@@ -275,6 +289,11 @@ class IntEncoder:
         """Return number of known symbols."""
         return len(self.encode_map)
 
+## -------------------------------------  Notes ----------------------------------------()
+# 1. get_default_int_encoder():
+#    用固定的 BASE_ALPHA 创建一个默认的 IntEncoder object。
+#    如果指定 cache_size，则同时设置 LRU cache；默认不开 cache
+# 2. 检查整个 IntEncoder 的 encode -> decode 流程是否正确。
 
 def get_default_int_encoder(cache_size: Optional[int] = None) -> IntEncoder:
     """Return default integer encoder."""
@@ -292,6 +311,12 @@ def _default_encoder_sanity_check() -> None:
 
 _default_encoder_sanity_check()
 
+
+## -------------------------------------  Notes ----------------------------------------()
+# 1. 用onehot form pytorch来从刚才的integer encoding转换成one-hot encoding
+# 2. 先把 int32 转成 int64，因为 PyTorch one_hot() 要求 class index 是 int64/LongTensor。
+# 3. one-hot 结果最后再转成 float32，方便送进 neural network。
+# 4. shape: (N, L) -> (N, L, num_classes)
 
 def int_to_floatonehot(int_form: torch.Tensor, num_classes: int = -1) -> torch.Tensor:
     """Transform 32-bit integer encoding to a float32 one-hot encoding.

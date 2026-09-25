@@ -74,7 +74,7 @@ class T5EncoderWrapper:
         )
 
         # Load the model
-        self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name).to(device)  # type: ignore[no-any-return]
+        self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True).to(device)  # type: ignore[no-any-return]
         self.integer_encoder = integer_encoder
         self.per_protein = per_protein
         self.batch_size = batch_size
