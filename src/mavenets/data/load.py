@@ -426,166 +426,6 @@ def _get_data_frames(
 
 
 ## -------------------------------------  Notes ----------------------------------------()
-def get_datasets_from_frame(
-    train_frame: pd.DataFrame,
-    valid_frame: pd.DataFrame,
-    test_frame: pd.DataFrame,
-    *,
-    device: str,
-    feat_type: Literal["integer", "onehot", "t5", "esmc"] = "integer",
-    graph: bool = False,
-    graph_sequence_window_size: int = 10,
-    graph_n_distance_feats: int = 10,
-    graph_distance_cutoff: float = 2.5,
-    parent_path: Path = Path(),
-    include_test: bool = False,
-    whiten: Optional[bool] = None,
-) -> Union[
-    Tuple[SequenceDataset, SequenceDataset],
-    Tuple[SequenceDataset, SequenceDataset, SequenceDataset],
-]:
-    """Load, featurize, and return  data for training and evaluation.
-
-    Loads target signal and sequences from disk, and if graph is specified reads
-    a file describing the 3d structure of the protein. If graph is True, the
-    underlying datasets are DNSEDataset instances; else, TensorDatasets are used.
-    All returned datasets are wrapped in SequenceDataset, which provides access
-    to the raw amino acid sequences via the get_sequence() method and sequences
-    property.
-
-    If include_test is True, 3 datasets are returned: train, validation, and test.
-    If False, only train and validation are returned.
-
-    """
-
-    if feat_type not in ("integer", "onehot", "t5", "esmc"):
-        raise ValueError("Only integer, onehot, esmc or t5 featurization is supported.")
-
-    if whiten is None:
-        #whiten = feat_type in ("t5")
-        whiten = feat_type in ("t5","esmc")
-
-    if whiten:
-        post_transform: SKT_protocol = Whiten()
-    else:
-        post_transform = NullTransform(copy=False)
-
-    train_frame = train_frame.copy()
-    valid_frame = valid_frame.copy()
-
-    if EXPERIMENT_CNAME not in train_frame.columns:
-        train_frame[EXPERIMENT_CNAME] = 0
-
-    if EXPERIMENT_CNAME not in valid_frame.columns:
-        valid_frame[EXPERIMENT_CNAME] = 0
-
-    all_frames = [train_frame, valid_frame]
-
-    if include_test:
-        test_frame = test_frame.copy()
-        if EXPERIMENT_CNAME not in test_frame.columns:
-            test_frame[EXPERIMENT_CNAME] = 0
-        all_frames.append(test_frame)
-
-    enc = get_default_int_encoder()
-
-    # make sure that there are no amino acids in the data not in our standard
-    # alphabet. We use a standard alphabet to maintain featurization stability
-    # across possibly smaller input datasets.
-    alpha = get_alphabet(pd.concat(all_frames), SEQ_CNAME)
-    if not set(alpha).issubset(set(enc.alphabet)):
-        raise ValueError("Data contains residues not represented fixed alphabet.")
-
-    train_encoded, train_signal, train_dset_id, train_sequences = _process_table(
-        train_frame,
-        feat_type=feat_type,
-        int_encoder=enc,
-        device=device,
-    )
-
-    post_transform.fit(train_encoded)
-    train_encoded = post_transform.transform(train_encoded)
-
-    valid_encoded, valid_signal, valid_dset_id, valid_sequences = _process_table(
-        valid_frame,
-        feat_type=feat_type,
-        int_encoder=enc,
-        device=device,
-    )
-
-    valid_encoded = post_transform.transform(valid_encoded)
-
-    # Initialize test variables - will be set if include_test is True
-    test_base: Optional[SizedDataset[object]] = None
-    test_sequences: Optional[Tuple[str, ...]] = None
-
-    if include_test:
-        test_encoded, test_signal, test_dset_id, test_sequences = _process_table(
-            test_frame,
-            feat_type=feat_type,
-            int_encoder=enc,
-            device=device,
-        )
-        test_encoded = post_transform.transform(test_encoded)
-
-    if graph:
-        edge_labels, edge_features = get_graph(
-            structure=str(parent_path / SARSCOV2_FILENAME),
-            max_cutoff=graph_distance_cutoff,
-            min_cutoff=0.0,
-            num_distance_features=graph_n_distance_feats,
-            window_size=graph_sequence_window_size,
-            node_offset=0,
-        )
-
-        train_base: Dataset = DNSEDataset(
-            edge_attr=edge_features.to(device),
-            edge_index=edge_labels.to(device),
-            x=train_encoded.to(device),
-            y=train_signal.to(device),
-            experiment=train_dset_id.to(device),
-        )
-        valid_base: Dataset = DNSEDataset(
-            edge_attr=edge_features.to(device),
-            edge_index=edge_labels.to(device),
-            x=valid_encoded.to(device),
-            y=valid_signal.to(device),
-            experiment=valid_dset_id.to(device),
-        )
-
-        if include_test:
-            test_base = DNSEDataset(
-                edge_attr=edge_features.to(device),
-                edge_index=edge_labels.to(device),
-                x=test_encoded.to(device),
-                y=test_signal.to(device),
-                experiment=test_dset_id.to(device),
-            )
-    else:
-        train_base = TensorDataset(
-            train_encoded.to(device), train_signal.to(device), train_dset_id.to(device)
-        )
-        valid_base = TensorDataset(
-            valid_encoded.to(device), valid_signal.to(device), valid_dset_id.to(device)
-        )
-        if include_test:
-            test_base = TensorDataset(
-                test_encoded.to(device), test_signal.to(device), test_dset_id.to(device)
-            )
-
-    # Wrap datasets with SequenceDataset to provide sequence access
-    train_dataset: SequenceDataset = SequenceDataset(train_base, train_sequences)
-    valid_dataset: SequenceDataset = SequenceDataset(valid_base, valid_sequences)
-
-    if include_test and test_base is not None and test_sequences is not None:
-        test_dataset: SequenceDataset = SequenceDataset(test_base, test_sequences)
-        return train_dataset, valid_dataset, test_dataset
-
-    return train_dataset, valid_dataset
-
-
-
-## -------------------------------------  Notes ----------------------------------------()
 #1.convert df to embedding and ready for model to learn
 #2.Use IntEncoder.batch_encode() defined in core.py to convert all sequences into integer tensor
 #3.depedning on feat_type to select embedding type (e.g. integer, onehot, t5) Can improve!!!
@@ -661,7 +501,10 @@ def get_datasets(
     train_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     val_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     test_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5"] = ...,
+    train_frame: Optional[pd.DataFrame] = None,
+    valid_frame: Optional[pd.DataFrame] = None,
+    test_frame: Optional[pd.DataFrame] = None,
+    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -680,7 +523,10 @@ def get_datasets(
     train_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     val_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     test_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5"] = ...,
+    train_frame: Optional[pd.DataFrame] = None,
+    valid_frame: Optional[pd.DataFrame] = None,
+    test_frame: Optional[pd.DataFrame] = None,
+    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -699,7 +545,10 @@ def get_datasets(
     train_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     val_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
     test_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5"] = ...,
+    train_frame: Optional[pd.DataFrame] = None,
+    valid_frame: Optional[pd.DataFrame] = None,
+    test_frame: Optional[pd.DataFrame] = None,
+    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -732,7 +581,10 @@ def get_datasets(  # noqa: C901
     train_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = None,
     val_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = None,
     test_specs: Union[None, Iterable[DataSpec], Iterable[int], Iterable[str]] = None,
-    feat_type: Literal["integer", "onehot", "t5"] = "integer",
+    train_frame: Optional[pd.DataFrame] = None,
+    valid_frame: Optional[pd.DataFrame] = None,
+    test_frame: Optional[pd.DataFrame] = None,
+    feat_type: Literal["integer", "onehot", "t5", "esmc"] = "integer",
     graph: bool = False,
     graph_sequence_window_size: int = 10,
     graph_n_distance_feats: int = 10,
@@ -819,42 +671,64 @@ def get_datasets(  # noqa: C901
     returned.
 
     """
-    if feat_type not in ("integer", "onehot", "t5"):
-        raise ValueError("Only integer, onehot, or t5 featurization is supported.")
+    if feat_type not in ("integer", "onehot", "t5", "esmc"):
+        raise ValueError("Only integer, onehot, esmc or t5 featurization is supported.")
 
     if whiten is None:
-        whiten = feat_type == "t5"
+        whiten = feat_type in ("t5","esmc")
 
     if whiten:
         post_transform: SKT_protocol = Whiten()
     else:
         post_transform = NullTransform(copy=False)
 
-    if train_specs is None:
-        train_specs = CORE_DATA_SPECS
-
-    if val_specs is None:
-        val_specs = CORE_DATA_SPECS
-
-    if test_specs is None:
-        test_specs = CORE_DATA_SPECS
-
-    train_frame = _get_aggregate_mave_csv(
-        specs=train_specs, identifier="train_filename", directory=parent_path
+# Update by LW: choose DataFrame route OR original DataSpec route
+    frames_provided = (
+        train_frame is not None
+        or valid_frame is not None
+        or test_frame is not None
     )
 
-    valid_frame = _get_aggregate_mave_csv(
-        specs=val_specs, identifier="valid_filename", directory=parent_path
-    )
+    if not frames_provided:
+
+        # Original DataSpec workflow
+        if train_specs is None:
+            train_specs = CORE_DATA_SPECS
+
+        if val_specs is None:
+            val_specs = CORE_DATA_SPECS
+
+        if test_specs is None:
+            test_specs = CORE_DATA_SPECS
+
+        train_frame = _get_aggregate_mave_csv(
+            specs=train_specs, identifier="train_filename", directory=parent_path
+        )
+
+        valid_frame = _get_aggregate_mave_csv(
+            specs=val_specs, identifier="valid_filename", directory=parent_path
+        )
+
+        if include_test:
+            test_frame = _get_aggregate_mave_csv(
+                specs=test_specs, identifier="test_filename", directory=parent_path
+            )
+
+    # From here onward, both routes are identical
+    assert train_frame is not None
+    assert valid_frame is not None
 
     all_frames = [train_frame, valid_frame]
 
     if include_test:
-        test_frame: Optional[pd.DataFrame] = _get_aggregate_mave_csv(
-            specs=test_specs, identifier="test_filename", directory=parent_path
-        )
+        assert test_frame is not None
         all_frames.append(test_frame)
 
+    # Ensure experiment column exists for all frames
+    for frame in all_frames:
+        if EXPERIMENT_CNAME not in frame.columns:
+            frame[EXPERIMENT_CNAME] = 0
+    
     enc = get_default_int_encoder()
 
     # make sure that there are no amino acids in the data not in our standard
