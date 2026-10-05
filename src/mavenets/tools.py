@@ -410,7 +410,7 @@ def train_tunable_model( # noqa: C901
         torch.linspace(
             start_loss_param, end_loss_param, loss_param_ramp_size, device=device
         )
-    )
+    ) # creates a one-dimensional tensor of evenly spaced values between a specified start and end point, inclusive
 
     wrapped_model = _MHTunerWrapper(model, graph=graph)
 
