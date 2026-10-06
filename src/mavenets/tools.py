@@ -147,8 +147,8 @@ def _create_parameterized_train_stepper(
             loss_value = loss_function(pred, reference, loss_param)
         optimizer.zero_grad()
         loss_value.backward()
+        clip_grad_norm_(model.parameters(), grad_clip) ##Updated by LW
         optimizer.step()
-        clip_grad_norm_(model.parameters(), grad_clip)
         return pred
 
     if compile:
