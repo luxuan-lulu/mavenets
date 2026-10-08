@@ -1,6 +1,6 @@
 """Routines for creating predictions using trained models."""
 from pathlib import Path
-from typing import TypeVar, Final, List, Union
+from typing import TypeVar, Final, List, Union, Optional
 import torch
 import numpy as np
 from sklearn.linear_model import LinearRegression  # type: ignore[import-untyped]
@@ -10,6 +10,7 @@ import pandas as pd  # type: ignore
 from .network import MHTuner
 from .tools import SIGNAL_PYGBATCHKEY, EXP_PYGBATCHKEY
 from .data import resolve_dataspec, SequenceDataset, SARS_COV2_SEQ
+from .util import compute_mutation_distances
 
 _T = TypeVar("_T")
 
@@ -18,46 +19,20 @@ TUNED_PRED_KEY: Final = "tuned"
 RAW_PRED_KEY: Final = "raw"
 EXPID_KEY: Final = "experiment"
 SEQUENCE_KEY: Final = "sequence"
-MUTCOUNT_KEY: Final = "mutations_from_sarscov2"
+MUTCOUNT_KEY: Final = "mutations_from_WT"
 TUNED_CALIBRATED_KEY: Final = "tuned_calibrated"
 RAW_CALIBRATED_KEY: Final = "raw_calibrated"
-
-
-def _compute_mutation_distances(sequences: List[str], reference: str) -> List[int]:
-    """Compute the number of mutations from a reference sequence for each sequence.
-
-    Arguments:
-    ---------
-    sequences:
-        List of amino acid sequences to compare.
-    reference:
-        Reference sequence to compare against.
-
-    Returns:
-    -------
-    List of integers, each representing the number of positions where the
-    corresponding sequence differs from the reference.
-
-    """
-    distances = []
-    for seq in sequences:
-        if len(seq) != len(reference):
-            raise ValueError(
-                f"Sequence length ({len(seq)}) does not match "
-                f"reference length ({len(reference)})"
-            )
-        distance = sum(1 for a, b in zip(seq, reference) if a != b)
-        distances.append(distance)
-    return distances
 
 
 def predict(
     model: MHTuner,
     dataset: Dataset,  # type: ignore[type-arg]
     graph: bool = False,
-    translate_experiment_ids: bool = True,
+    translate_experiment_ids: bool = False,
     batch_size: int = 256,
     linear_calibration: bool = False,
+    reference_sequence: Optional[str] = SARS_COV2_SEQ,
+    need_mutation_count: bool = False
 ) -> pd.DataFrame:
     """Create a table of raw and tuned predictions.
 
@@ -104,11 +79,14 @@ def predict(
     "raw_calibrated"
         Raw predictions linearly calibrated to the reference, per experiment.
 
-    If dataset is a SequenceDataset, the following additional columns are included:
-    "sequence"
-        The raw amino acid sequence.
-    "mutations_from_sarscov2"
-        Number of mutations from the SARS-CoV-2 reference sequence.
+    If dataset is a SequenceDataset, the raw amino acid sequence and stored metadata are also included.
+
+    reference_sequence:
+        Reference sequence used to calculate mutation counts.
+        Defaults to SARS_COV2_SEQ.
+
+    need_mutation_count:
+        If True, calculate the number of mutations from reference_sequence.
 
     """
     if graph:
@@ -178,7 +156,22 @@ def predict(
     if isinstance(dataset, SequenceDataset):
         sequences = list(dataset.sequences)
         df[SEQUENCE_KEY] = sequences
-        df[MUTCOUNT_KEY] = _compute_mutation_distances(sequences, SARS_COV2_SEQ)
+
+        # Add metadata already stored in SequenceDataset
+        for key, values in dataset.metadata.items():
+            df[key] = values
+
+        # Calculate mutation count only if requested
+        if need_mutation_count:
+            if reference_sequence is None:
+                raise ValueError(
+                    "reference_sequence is required when need_mutation_count=True."
+                )
+        
+            df[MUTCOUNT_KEY] = compute_mutation_distances(
+                sequences,
+                reference_sequence,
+            )
 
     return df
 
