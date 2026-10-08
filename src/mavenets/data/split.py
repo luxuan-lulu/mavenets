@@ -5,16 +5,8 @@ from typing import Iterable, Optional, Tuple
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from ..util import compute_mutation_distances
 
-
-def _select_columns(
-    frame: pd.DataFrame,
-    id_col: str,
-    sequence_col: str,
-    signal_col: str,
-) -> pd.DataFrame:
-    """Keep only columns needed downstream."""
-    return frame[[id_col, sequence_col, signal_col]].copy()
 
 def _save_splits(
     train_frame: pd.DataFrame,
@@ -23,32 +15,26 @@ def _save_splits(
     output_dir: Path,
     name: str,
 ) -> None:
-    """Save splits in MAVENets CSV format."""
+    """Save splits in CSV format."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     train_frame.to_csv(
         output_dir / f"{name}_train.csv",
-        index=False,
-        header=False,
+        index=False
     )
     valid_frame.to_csv(
         output_dir / f"{name}_valid.csv",
-        index=False,
-        header=False,
+        index=False
     )
     test_frame.to_csv(
         output_dir / f"{name}_test.csv",
-        index=False,
-        header=False,
+        index=False
     )
 
 
 def random_split(
     frame: pd.DataFrame,
-    id_col: str,
-    sequence_col: str,
-    signal_col: str,
     train_size: float = 0.8,
     valid_size: float = 0.1,
     test_size: float = 0.1,
@@ -86,22 +72,10 @@ def random_split(
         stratify=tmp_stratify,
     )
 
-    train_frame = _select_columns(
-        train_frame, id_col, sequence_col, signal_col
-    )
-    valid_frame = _select_columns(
-        valid_frame, id_col, sequence_col, signal_col
-    )
-    test_frame = _select_columns(
-        test_frame, id_col, sequence_col, signal_col
-    )
-
-
     if save:
-        if output_dir is None or id_col is None or sequence_col is None or signal_col is None:
+        if output_dir is None:
             raise ValueError(
-                "output_dir, id_col, sequence_col, and signal_col are required "
-                "when save=True."
+                "output_dir is required when save=True."
             )
 
         _save_splits(
@@ -117,18 +91,40 @@ def random_split(
 
 def split_by_mutation_num(
     frame: pd.DataFrame,
-    mutation_count_col: str,
     train_num: Iterable[int],
     valid_num: Iterable[int],
     test_num: Iterable[int],
-    id_col: str,
-    sequence_col: str,
-    signal_col: str,
+    sequence_col: Optional[str] = None,
+    mutation_count_col: Optional[str] = None,
+    reference_sequence: Optional[str] = None,
     save: bool = False,
     output_dir: Optional[Path] = None,
     name: str = "dataset",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Split a DataFrame by mutation number."""
+
+
+    # Use existing mutation counts if available.
+    # Otherwise calculate them from the reference sequence.
+
+    if mutation_count_col is not None:
+        if mutation_count_col not in frame.columns:
+            raise ValueError(
+                f"'{mutation_count_col}' was not found in the DataFrame."
+            )
+
+    else:
+        if reference_sequence is None or sequence_col is None:
+            raise ValueError(
+                "reference_sequence and sequence_col are required when mutation_count_col is not provided."
+            )
+
+        frame = frame.copy()
+        mutation_count_col = "mut_num"
+        frame[mutation_count_col] = compute_mutation_distances(
+            frame[sequence_col].tolist(),
+            reference_sequence,
+        )
 
     train_counts = set(train_num)
     valid_counts = set(valid_num)
@@ -155,22 +151,10 @@ def split_by_mutation_num(
         frame[mutation_count_col].isin(test_counts)
     ].copy()
 
-    train_frame = _select_columns(
-        train_frame, id_col, sequence_col, signal_col
-    )
-    valid_frame = _select_columns(
-        valid_frame, id_col, sequence_col, signal_col
-    )
-    test_frame = _select_columns(
-        test_frame, id_col, sequence_col, signal_col
-    )
-
-
     if save:
-        if output_dir is None or id_col is None or sequence_col is None or signal_col is None:
+        if output_dir is None:
             raise ValueError(
-                "output_dir, id_col, sequence_col, and signal_col are required "
-                "when save=True."
+                "output_dir is required when save=True."
             )
 
         _save_splits(
