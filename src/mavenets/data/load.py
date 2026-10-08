@@ -74,10 +74,10 @@ class SizedDataset(Protocol[_T_co]):
 # seq_dataset.dataset -> 原来的 underlying dataset
 
 class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
-    """Wrapper dataset that adds sequence access to an underlying dataset.
+    """Wrapper dataset that adds sequence and metadata access to an underlying dataset.
 
     This class wraps an existing Dataset (such as TensorDataset or DNSEDataset)
-    and provides access to the raw amino acid sequences corresponding to each
+    and provides access to the raw amino acid sequences and optional metadata corresponding to each
     data point. When used as a standard Dataset (via indexing or iteration),
     it behaves identically to the wrapped dataset.
 
@@ -89,7 +89,8 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
     ```
     base_dataset = TensorDataset(features, signals, exp_ids)
     sequences = ("ACDEF...", "GHIKL...", ...)
-    seq_dataset = SequenceDataset(base_dataset, sequences)
+    metadata = {"mut_num": (1, 2)}
+    seq_dataset = SequenceDataset(base_dataset, sequences, metadata)
 
     # Standard dataset access returns same as base_dataset
     item = seq_dataset[0]  # Returns (features[0], signals[0], exp_ids[0])
@@ -97,17 +98,21 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
     # Sequence access
     seq = seq_dataset.get_sequence(0)  # Returns "ACDEF..."
     all_seqs = seq_dataset.sequences  # Returns tuple of all sequences
+
+    sample_metadata = seq_dataset.get_metadata(0)
+    all_metadata = seq_dataset.metadata
     ```
 
     """
 
     _dataset: SizedDataset[_T_co]
     _sequences: Tuple[str, ...]
+    _metadata: Dict[str, Tuple[object, ...]]
 
     def __init__(
-        self, dataset: SizedDataset[_T_co], sequences: Tuple[str, ...]
+        self, dataset: SizedDataset[_T_co], sequences: Tuple[str, ...], metadata: Optional[Dict[str, Tuple[object, ...]]] = None
     ) -> None:
-        """Initialize with a base dataset and corresponding sequences.
+        """Initialize with a base dataset, corresponding sequences, and optional metadata.
 
         Arguments:
         ---------
@@ -117,11 +122,14 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
         sequences:
             Tuple of raw amino acid sequences, one per data point.
             Must have the same length as the dataset.
-
+        metadata:
+            Optional dictionary containing additional metadata for each data point.
+            Keys are metadata field names, and values are tuples of the same length
+            as the dataset. If not provided, no metadata are stored.
         Raises:
         ------
         ValueError:
-            If the number of sequences doesn't match the dataset length.
+            If the number of sequences or metadata values doesn't match the dataset length.
 
         """
         super().__init__()
@@ -130,8 +138,19 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
                 f"Number of sequences ({len(sequences)}) must match "
                 f"dataset length ({len(dataset)})"
             )
+    
+        if metadata is not None:
+            for key, values in metadata.items():
+                if len(values) != len(dataset):
+                    raise ValueError(
+                        f"Metadata column '{key}' has length {len(values)}, "
+                        f"but dataset length is {len(dataset)}."
+                    )
+
+        
         self._dataset = dataset
         self._sequences = sequences
+        self._metadata = {} if metadata is None else dict(metadata)
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -156,6 +175,21 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
         """
         return self._sequences[idx]
 
+    def get_metadata(self, idx: int) -> Dict[str, object]:
+        """Return the metadata for the given index.
+
+        Arguments:
+        ---------
+        idx:
+            Index of the data point to retrieve metadata.
+
+        Returns:
+        -------
+        Dictionary containing metadata for the given index.
+
+        """
+        return {key: values[idx] for key, values in self._metadata.items()}
+
     @property
     def sequences(self) -> Tuple[str, ...]:
         """Return all raw sequences.
@@ -166,6 +200,11 @@ class SequenceDataset(Dataset[_T_co], Generic[_T_co]):
 
         """
         return self._sequences
+
+    @property
+    def metadata(self) -> Dict[str, Tuple[object, ...]]:
+        """Return metadata columns stored alongside the dataset."""
+        return self._metadata
 
     @property
     def dataset(self) -> SizedDataset[_T_co]:
@@ -533,6 +572,7 @@ def get_datasets(
     train_frame: Optional[pd.DataFrame] = None,
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
+    metadata_cols: Optional[List[str]] = ...,
     feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
@@ -555,6 +595,7 @@ def get_datasets(
     train_frame: Optional[pd.DataFrame] = None,
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
+    metadata_cols: Optional[List[str]] = ...,
     feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
@@ -577,6 +618,7 @@ def get_datasets(
     train_frame: Optional[pd.DataFrame] = None,
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
+    metadata_cols: Optional[List[str]] = ...,
     feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
@@ -613,6 +655,7 @@ def get_datasets(  # noqa: C901
     train_frame: Optional[pd.DataFrame] = None,
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
+    metadata_cols: Optional[List[str]] = None,
     feat_type: Literal["integer", "onehot", "t5", "esmc"] = "integer",
     graph: bool = False,
     graph_sequence_window_size: int = 10,
@@ -757,7 +800,29 @@ def get_datasets(  # noqa: C901
     for frame in all_frames:
         if EXPERIMENT_CNAME not in frame.columns:
             frame[EXPERIMENT_CNAME] = 0
-    
+
+    # Preserve only user-selected metadata
+    train_metadata = None
+    valid_metadata = None
+    test_metadata = None
+
+    if metadata_cols is not None:
+        train_metadata = {
+            col: tuple(train_frame[col])
+            for col in metadata_cols
+        }
+
+        valid_metadata = {
+            col: tuple(valid_frame[col])
+            for col in metadata_cols
+        }
+
+        if include_test:
+            test_metadata = {
+                col: tuple(test_frame[col])
+                for col in metadata_cols
+            }
+
     enc = get_default_int_encoder()
 
     # make sure that there are no amino acids in the data not in our standard
@@ -845,11 +910,11 @@ def get_datasets(  # noqa: C901
             )
 
     # Wrap datasets with SequenceDataset to provide sequence access
-    train_dataset: SequenceDataset = SequenceDataset(train_base, train_sequences)
-    valid_dataset: SequenceDataset = SequenceDataset(valid_base, valid_sequences)
+    train_dataset: SequenceDataset = SequenceDataset(train_base, train_sequences, metadata=train_metadata)
+    valid_dataset: SequenceDataset = SequenceDataset(valid_base, valid_sequences, metadata=valid_metadata )
 
     if include_test and test_base is not None and test_sequences is not None:
-        test_dataset: SequenceDataset = SequenceDataset(test_base, test_sequences)
+        test_dataset: SequenceDataset = SequenceDataset(test_base, test_sequences, metadata=test_metadata)
         return train_dataset, valid_dataset, test_dataset
 
     return train_dataset, valid_dataset
