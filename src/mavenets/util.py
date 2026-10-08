@@ -2,7 +2,7 @@
 
 This module should not import any other modules in the package.
 """
-from typing import Iterator, Sequence, TypeVar, Any, Callable, Optional, Generic
+from typing import Iterator, Sequence, TypeVar, Any, Callable, Optional, Generic, List
 from contextlib import contextmanager
 from operator import lt
 from torch import Tensor, sign, flatten
@@ -146,3 +146,30 @@ def num_changes(first: Tensor, second: Tensor, /, *, batch_axis: bool = True) ->
         return flat.sum(dim=1)
     else:
         return flags.sum()
+
+def compute_mutation_distances(sequences: List[str], reference: str) -> List[int]:
+    """Compute the number of mutations from a reference sequence for each sequence.
+
+    Arguments:
+    ---------
+    sequences:
+        List of amino acid sequences to compare.
+    reference:
+        Reference sequence to compare against.
+
+    Returns:
+    -------
+    List of integers, each representing the number of positions where the
+    corresponding sequence differs from the reference.
+
+    """
+    distances = []
+    for seq in sequences:
+        if len(seq) != len(reference):
+            raise ValueError(
+                f"Sequence length ({len(seq)}) does not match "
+                f"reference length ({len(reference)})"
+            )
+        distance = sum(1 for a, b in zip(seq, reference) if a != b)
+        distances.append(distance)
+    return distances
