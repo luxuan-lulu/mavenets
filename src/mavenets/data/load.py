@@ -12,6 +12,7 @@ from typing import (
     Protocol,
     TypeVar,
     Generic,
+    List
 )
 import pandas as pd  # type: ignore
 from torch.utils.data import TensorDataset
@@ -256,16 +257,24 @@ class DNSEDataset(Dataset):
 #2. read one headerless MAVE CSV and label its three columns as seq_id, sequence, and signal.
 
 # applies column names solely based on column order.
-def _mave_csv_read(f: Path) -> pd.DataFrame:
+def _mave_csv_read(f: Path, has_header: bool = False) -> pd.DataFrame:
     """Read csv files of a given format from disk and label columns.
 
     Format is assumed to be:
-        first column is an identitication number, second column is sequence
-        information, third column is a signal to fit.
+
+    If has_header is False, the file is assumed to contain three columns:
+    identification number, sequence, and signal.
+
+    If has_header is True, column names are read directly from the file and
+    all columns are preserved.     
 
     """
-    frame = pd.read_csv(f, header=None)
-    frame.columns = [CSV_RID_CNAME, SEQ_CNAME, SIGNAL_CNAME]
+    if has_header:
+        frame = pd.read_csv(f)
+
+    else:
+        frame = pd.read_csv(f, header=None)
+        frame.columns = [CSV_RID_CNAME, SEQ_CNAME, SIGNAL_CNAME]
     return frame
 
 
@@ -340,6 +349,7 @@ def _get_data_frames(
     train_path: Optional[Path] = None,
     valid_path: Optional[Path] = None,
     test_path: Optional[Path] = None,
+    split_has_header: bool = False,
 )-> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Get train, validation, and test DataFrames."""
 
@@ -373,51 +383,70 @@ def _get_data_frames(
                 "when loading raw data."
             )
 
-        split_kwargs = split_kwargs or {}
+        frame = _standardize_columns(
+            frame,
+            id_col,
+            sequence_col,
+            signal_col,
+        )
+
+        split_kwargs = dict(split_kwargs or {})
 
         if split_type == "random":
-            train_frame, valid_frame, test_frame = random_split(
-                frame,
-                id_col=id_col,
-                sequence_col=sequence_col,
-                signal_col=signal_col,
-                **split_kwargs,
-            )
+            return random_split(frame, **split_kwargs)
 
-        elif split_type == "mutation_num":
-            train_frame, valid_frame, test_frame = split_by_mutation_num(
-                frame,
-                id_col=id_col,
-                sequence_col=sequence_col,
-                signal_col=signal_col,
-                **split_kwargs,
-            )
+        if split_type == "mutation_num":
+            split_kwargs["sequence_col"] = SEQ_CNAME
+            return split_by_mutation_num(frame, **split_kwargs)
 
-        else:
-            raise ValueError(
+        raise ValueError(
                 "split_type must be 'random' or 'mutation_num'."
             )
 
-        # Convert raw column names -> MAVENets standard names
-        train_frame = _standardize_columns(
-            train_frame, id_col, sequence_col, signal_col
-        )
-        valid_frame = _standardize_columns(
-            valid_frame, id_col, sequence_col, signal_col
-        )
-        test_frame = _standardize_columns(
-            test_frame, id_col, sequence_col, signal_col
-        )
-
-        return train_frame, valid_frame, test_frame
-
     # 3. Already-split CSV files
     if train_path is not None and valid_path is not None and test_path is not None:
-        return (
-            _mave_csv_read(train_path),
-            _mave_csv_read(valid_path),
-            _mave_csv_read(test_path),
+
+        train_frame = _mave_csv_read(
+            train_path,
+            has_header=split_has_header,
         )
+        valid_frame = _mave_csv_read(
+            valid_path,
+            has_header=split_has_header,
+        )
+        test_frame = _mave_csv_read(
+            test_path,
+            has_header=split_has_header,
+        )
+
+        # If files have headers, standardize their required column names.
+        if split_has_header:
+            if id_col is None or sequence_col is None or signal_col is None:
+                raise ValueError(
+                    "id_col, sequence_col, and signal_col are required "
+                    "for headered split CSV files."
+                    )
+
+            train_frame = _standardize_columns(
+                train_frame,
+                id_col,
+                sequence_col,
+                signal_col,
+            )
+            valid_frame = _standardize_columns(
+                valid_frame,
+                id_col,
+                sequence_col,
+                signal_col,
+            )
+            test_frame = _standardize_columns(
+                test_frame,
+                id_col,
+                sequence_col,
+                signal_col,
+            )
+
+        return train_frame, valid_frame, test_frame
 
     raise ValueError(
         "Provide raw data (frame/frame_path) or "
