@@ -31,7 +31,7 @@ from .featurize import (
     NullTransform,
 )
 from .graph import get_graph
-from .split import random_split, split_by_mutation_num
+from .split import random_split, split_by_group
 
 # column names for labeling loaded MAVE experiment csvs.
 CSV_RID_CNAME: Final = "seq_id"
@@ -434,12 +434,12 @@ def _get_data_frames(
         if split_type == "random":
             return random_split(frame, **split_kwargs)
 
-        if split_type == "mutation_num":
+        if split_type == "group":
             split_kwargs["sequence_col"] = SEQ_CNAME
-            return split_by_mutation_num(frame, **split_kwargs)
+            return split_by_group(frame, **split_kwargs)
 
         raise ValueError(
-                "split_type must be 'random' or 'mutation_num'."
+                "split_type must be 'random' or 'group'."
             )
 
     # 3. Already-split CSV files

@@ -89,66 +89,59 @@ def random_split(
     return train_frame, valid_frame, test_frame
 
 
-def split_by_mutation_num(
+def split_by_group(
     frame: pd.DataFrame,
-    train_num: Iterable[int],
-    valid_num: Iterable[int],
-    test_num: Iterable[int],
+    train_num: Iterable[Any],
+    valid_num: Iterable[Any],
+    test_num: Iterable[Any],
+    split_col: Optional[str] = None,
     sequence_col: Optional[str] = None,
-    mutation_count_col: Optional[str] = None,
     reference_sequence: Optional[str] = None,
     save: bool = False,
     output_dir: Optional[Path] = None,
     name: str = "dataset",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split a DataFrame by mutation number."""
+    """Split a DataFrame by in a specified column."""
 
 
-    # Use existing mutation counts if available.
-    # Otherwise calculate them from the reference sequence.
+    # Use an existing column for splitting if provided.
+    # Otherwise calculate mutation counts from the reference sequence.
 
-    if mutation_count_col is not None:
-        if mutation_count_col not in frame.columns:
-            raise ValueError(
-                f"'{mutation_count_col}' was not found in the DataFrame."
-            )
+    if split_col is not None:
+        if split_col not in frame.columns:
+            raise ValueError(f"'{split_col}' was not found in the DataFrame.")
 
     else:
         if reference_sequence is None or sequence_col is None:
-            raise ValueError(
-                "reference_sequence and sequence_col are required when mutation_count_col is not provided."
-            )
+            raise ValueError("reference_sequence and sequence_col are required when split_col is not provided.")
 
         frame = frame.copy()
-        mutation_count_col = "mut_num"
-        frame[mutation_count_col] = compute_mutation_distances(
-            frame[sequence_col].tolist(),
-            reference_sequence,
-        )
+        split_col = "mut_num"
+        frame[split_col] = compute_mutation_distances(frame[sequence_col].tolist(), reference_sequence)
 
-    train_counts = set(train_num)
-    valid_counts = set(valid_num)
-    test_counts = set(test_num)
+    train_values = set(train_num)
+    valid_values = set(valid_num)
+    test_values = set(test_num)
 
-    if train_counts & valid_counts:
-        raise ValueError("train and validation mutation numbers overlap.")
+    if train_values & valid_values:
+        raise ValueError("train and validation split value overlap.")
 
-    if train_counts & test_counts:
-        raise ValueError("train and test mutation numbers overlap.")
+    if train_values & test_values:
+        raise ValueError("train and test split value overlap.")
 
-    if valid_counts & test_counts:
-        raise ValueError("validation and test mutation numbers overlap.")
+    if valid_values & test_values:
+        raise ValueError("validation and test split value overlap.")
 
     train_frame = frame[
-        frame[mutation_count_col].isin(train_counts)
+        frame[split_col].isin(train_values)
     ].copy()
 
     valid_frame = frame[
-        frame[mutation_count_col].isin(valid_counts)
+        frame[split_col].isin(valid_values)
     ].copy()
 
     test_frame = frame[
-        frame[mutation_count_col].isin(test_counts)
+        frame[split_col].isin(test_values)
     ].copy()
 
     if save:
