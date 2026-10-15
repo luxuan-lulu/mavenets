@@ -1,7 +1,7 @@
 """Utilities for splitting datasets."""
 
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Tuple, Any
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
