@@ -277,6 +277,7 @@ def _eval_dataset(
             batch_size=batch_size,
         )
     losses = []
+    samples = []
     for batch in loader:
         if graph:
             full_inp = batch
@@ -288,10 +289,11 @@ def _eval_dataset(
         loss = evaler(
             inp=full_inp,
             reference=signal,
-            loss_param=loss_param,
+            loss_param=loss_param
         ).item()
         losses.append(loss)
-    return sequence_mean(losses)
+        samples.append(len(signal))
+    return sum(loss * n for loss, n in zip(losses, samples))/sum(samples)
 
 
 def train_tunable_model( # noqa: C901
