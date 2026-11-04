@@ -10,6 +10,7 @@ from tqdm import tqdm  # type: ignore
 import pandas as pd  # type: ignore
 from .util import null_contextmanager, sequence_mean, Patience
 from .network import MHTuner
+from pathlib import Path
 
 SIGNAL_PYGBATCHKEY: Final = "y"
 EXP_PYGBATCHKEY: Final = "experiment"
@@ -295,7 +296,6 @@ def _eval_dataset(
         samples.append(len(signal))
     return sum(loss * n for loss, n in zip(losses, samples))/sum(samples)
 
-
 def train_tunable_model( # noqa: C901
     model: MHTuner,
     optimizer: torch.optim.Optimizer,
@@ -320,6 +320,7 @@ def train_tunable_model( # noqa: C901
     patience: int = 50,
     graph: bool = False,
     trainval_aware_optimizer: bool = False,
+    checkpoint_dir: Optional[Path] = None
 ) -> Tuple[int, float, pd.DataFrame]:
     """Train MHTuner instance.
 
@@ -453,6 +454,11 @@ def train_tunable_model( # noqa: C901
     patience_counter: Patience[float] = Patience()
 
     records = []  # holds train/validation scores
+
+    if checkpoint_dir is not None:
+        checkpoint_dir = Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     if progress_bar:
         epoch_source = tqdm(range(n_epochs))
     else:
@@ -492,6 +498,7 @@ def train_tunable_model( # noqa: C901
                     graph=graph,
                 )
                 rep.update({VALID_LOSS_CNAME: epoch_val_loss})
+
                 # go through every report dataset
                 for reporter_name, reporter_dset in report_datasets.items():
                     score = _eval_dataset(
@@ -502,7 +509,13 @@ def train_tunable_model( # noqa: C901
                         graph=graph,
                     )
                     rep.update({reporter_name: score})
+
             records.append(rep)
+
+            # Save model weights                          added by LW
+            if checkpoint_dir is not None:
+                torch.save({"epoch": epoch, "model_state_dict": model.state_dict()}, checkpoint_dir / f"epoch_{epoch}.pt")
+
             # early termination
             patience_count = patience_counter.consider(epoch_val_loss)
             if patience_count > patience / report_stride:
@@ -522,4 +535,9 @@ def train_tunable_model( # noqa: C901
     rolled_vals = table[VALID_LOSS_CNAME].rolling(3, center=True).median()
     best_epoch = rolled_vals.index[rolled_vals.argmin(skipna=True)]
     best_val = rolled_vals.min()
+
+    if checkpoint_dir is not None:
+        checkpoint = torch.load(checkpoint_dir / f"epoch_{best_epoch}.pt", weights_only=True)
+        model.load_state_dict(checkpoint["model_state_dict"])
+
     return best_epoch, best_val, table
