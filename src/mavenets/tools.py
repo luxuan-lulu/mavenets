@@ -537,7 +537,14 @@ def train_tunable_model( # noqa: C901
     best_val = rolled_vals.min()
 
     if checkpoint_dir is not None:
-        checkpoint = torch.load(checkpoint_dir / f"epoch_{best_epoch}.pt", weights_only=True)
+        best_checkpoint = checkpoint_dir / f"epoch_{best_epoch}.pt"
+        # Reload the best model weights
+        checkpoint = torch.load(best_checkpoint, weights_only=True)
         model.load_state_dict(checkpoint["model_state_dict"])
+        # Remove other checkpoints
+        for file in checkpoint_dir.glob("epoch_*.pt"):
+            if file != best_checkpoint:
+                file.unlink()
+
 
     return best_epoch, best_val, table
