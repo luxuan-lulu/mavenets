@@ -11,6 +11,8 @@ from .network import MHTuner
 from .tools import SIGNAL_PYGBATCHKEY, EXP_PYGBATCHKEY
 from .data import resolve_dataspec, SequenceDataset, SARS_COV2_SEQ
 from .util import compute_mutation_distances
+from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 _T = TypeVar("_T")
 
@@ -237,3 +239,38 @@ def report_dataset(
         df[REFERENCE_KEY] = np.concatenate(all_references, axis=0)
 
     df.to_csv(output, index=False)
+
+
+def evaluate_predictions(
+    frame: pd.DataFrame,
+    metrics=("mse", "rmse", "mae", "r2", "pearson", "spearman"),
+    reference_col: str = "reference",
+    prediction_col: str = "raw",
+) -> dict:
+    """Evaluate regression predictions using selected metrics."""
+
+    reference = frame[reference_col]
+    prediction = frame[prediction_col]
+
+    metric_functions = {
+        "mse": lambda: mean_squared_error(reference, prediction),
+        "rmse": lambda: mean_squared_error(reference, prediction) ** 0.5,
+        "mae": lambda: mean_absolute_error(reference, prediction),
+        "r2": lambda: r2_score(reference, prediction),
+        "pearson": lambda: pearsonr(reference, prediction).statistic,
+        "spearman": lambda: spearmanr(reference, prediction).statistic
+        }
+
+    results = {}
+
+    for metric in metrics:
+        metric = metric.lower()
+        if metric not in metric_functions:
+            raise ValueError(
+                f"Unknown metric '{metric}'. "
+                f"Available metrics: {list(metric_functions)}"
+            )
+
+        results[metric] = metric_functions[metric]()
+
+    return results 
