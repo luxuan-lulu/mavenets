@@ -535,6 +535,7 @@ def train_tunable_model( # noqa: C901
     rolled_vals = table[VALID_LOSS_CNAME].rolling(3, center=True).median()
     best_epoch = rolled_vals.index[rolled_vals.argmin(skipna=True)]
     best_val = rolled_vals.min()
+    best_epoch_val = table.loc[best_epoch,VALID_LOSS_CNAME]
 
     if checkpoint_dir is not None:
         best_checkpoint = checkpoint_dir / f"epoch_{best_epoch}.pt"
@@ -547,4 +548,4 @@ def train_tunable_model( # noqa: C901
                 file.unlink()
 
 
-    return best_epoch, best_val, table
+    return best_epoch, best_val, table, best_epoch_val
