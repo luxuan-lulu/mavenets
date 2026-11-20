@@ -91,18 +91,46 @@ def random_split(
 
 def split_by_group(
     frame: pd.DataFrame,
-    train_num: Iterable[Any],
-    valid_num: Iterable[Any],
-    test_num: Iterable[Any],
+    test_group: Iterable[Any],
+    train_group: Optional[Iterable[Any]] = None,
+    valid_group: Optional[Iterable[Any]] = None,
     split_col: Optional[str] = None,
+    valid_size: float = 0.1,
+    random_state: int = 42,
+    stratify_col: Optional[str] = None,
+    shuffle: bool = True,
     sequence_col: Optional[str] = None,
     reference_sequence: Optional[str] = None,
     save: bool = False,
     output_dir: Optional[Path] = None,
-    name: str = "dataset",
+    name: str = "dataset"
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split a DataFrame by in a specified column."""
 
+    """Split a DataFrame by groups.
+
+    Three split modes are supported:
+
+    1. Hold-out test mode:
+       Specify test_group only. The selected group(s) are used as the
+       test set, and all remaining rows are randomly split into training
+       and validation sets.
+
+    2. Hold-out test mode with selected training groups:
+       Specify test_group and train_group, but not valid_group.
+       The selected test group(s) are held out completely. Rows belonging
+       to train_group form the development pool, which is then randomly
+       split into training and validation sets.
+
+    3. Explicit group mode:
+       Specify train_group, valid_group, and test_group. Each dataset is
+       constructed directly from the specified groups.
+
+    If split_col is not provided, mutation distances relative to
+    reference_sequence are calculated and used as the grouping variable.
+
+    stratify_col is used only when a random train/validation split is
+    performed (Modes 1 and 2).
+    """
 
     # Use an existing column for splitting if provided.
     # Otherwise calculate mutation counts from the reference sequence.
@@ -115,40 +143,74 @@ def split_by_group(
         if reference_sequence is None or sequence_col is None:
             raise ValueError("reference_sequence and sequence_col are required when split_col is not provided.")
 
+        if sequence_col not in frame.columns:
+            raise ValueError(f"'{sequence_col}' was not found in the DataFrame.")
+
         frame = frame.copy()
         split_col = "mut_num"
         frame[split_col] = compute_mutation_distances(frame[sequence_col].tolist(), reference_sequence)
 
-    train_values = set(train_num)
-    valid_values = set(valid_num)
-    test_values = set(test_num)
 
-    if train_values & valid_values:
-        raise ValueError("train and validation split value overlap.")
+    if test_group is None:
+        raise ValueError("test_group is required.")
 
-    if train_values & test_values:
-        raise ValueError("train and test split value overlap.")
+    if train_group is None and valid_group is not None:
+        raise ValueError("valid_group cannot be provided without train_group.")
 
-    if valid_values & test_values:
-        raise ValueError("validation and test split value overlap.")
+    test_values = set(test_group)
 
-    train_frame = frame[
-        frame[split_col].isin(train_values)
-    ].copy()
+    ### Mode1: test_group only ####
+    if train_group is None:
+        test_frame = frame[frame[split_col].isin(test_values)].copy()
+        dev_frame = frame[~frame[split_col].isin(test_values)].copy()
 
-    valid_frame = frame[
-        frame[split_col].isin(valid_values)
-    ].copy()
+        stratify = dev_frame[stratify_col] if stratify_col is not None else None
 
-    test_frame = frame[
-        frame[split_col].isin(test_values)
-    ].copy()
+        train_frame, valid_frame = train_test_split(
+        dev_frame,
+        test_size=valid_size,
+        random_state=random_state,
+        shuffle=shuffle,
+        stratify=stratify,
+        )
+
+    ### Mode2: selected test_group + train_group ####
+    elif valid_group is None:
+        train_values = set(train_group)
+        if train_values & test_values:
+            raise ValueError("train and test split value overlap.")
+        test_frame = frame[frame[split_col].isin(test_values)].copy()
+        dev_frame = frame[frame[split_col].isin(train_values)].copy()
+
+        stratify = dev_frame[stratify_col] if stratify_col is not None else None
+
+        train_frame, valid_frame = train_test_split(
+        dev_frame,
+        test_size=valid_size,
+        random_state=random_state,
+        shuffle=shuffle,
+        stratify=stratify,
+        )
+      
+    ### Mode3: explicit train/val/test groups ####
+    else:
+        train_values = set(train_group)
+        valid_values = set(valid_group)
+
+        if train_values & valid_values:
+            raise ValueError("train and validation split value overlap.")
+        if train_values & test_values:
+            raise ValueError("train and test split value overlap.")
+        if valid_values & test_values:
+            raise ValueError("validation and test split value overlap.")
+
+        train_frame = frame[frame[split_col].isin(train_values)].copy()
+        valid_frame = frame[frame[split_col].isin(valid_values)].copy()
+        test_frame = frame[frame[split_col].isin(test_values)].copy()
 
     if save:
         if output_dir is None:
-            raise ValueError(
-                "output_dir is required when save=True."
-            )
+            raise ValueError("output_dir is required when save=True.")
 
         _save_splits(
             train_frame,
