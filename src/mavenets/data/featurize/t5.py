@@ -75,8 +75,8 @@ class T5EncoderWrapper:
 
         # Load the model
         #self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name).to(device)  # type: ignore[no-any-return]
-        #self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True,torch_dtype=torch.float32).to(device)  # type: ignore[no-any-return]
-        self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True).to(device)  # type: ignore[no-any-return]
+        self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True,torch_dtype=torch.float32).to(device)  # type: ignore[no-any-return]
+        #self.t5: T5EncoderModel = T5EncoderModel.from_pretrained(self.T5_huggingface_name,use_safetensors=True).to(device)  # type: ignore[no-any-return]
         self.integer_encoder = integer_encoder
         self.per_protein = per_protein
         self.batch_size = batch_size
@@ -110,11 +110,11 @@ class T5EncoderWrapper:
 
         if self.per_protein:
             # average over residues, not batch examples
-            return emb.mean(dim=1)
+            return emb[:,:-1,:].mean(dim=1)
         elif self.flatten:
-            return emb.flatten(start_dim=1)
+            return emb[:,:-1,:].flatten(start_dim=1)
         else:
-            return emb
+            return emb[:,:-1,:]
 
     def batch_encode(self, int_encoded: Tensor) -> Tensor:
         """Encode iterable of sequences.
