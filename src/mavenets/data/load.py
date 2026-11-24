@@ -32,6 +32,10 @@ from .featurize import (
 )
 from .graph import get_graph
 from .split import random_split, split_by_group
+from .featurize.t5 import T5EncoderWrapper, t5_pca_encode
+from .featurize.esmc import ESMCEncoderWrapper, esmc_pca_encode
+from .featurize.transform import IncrementalPCATransform
+
 
 # column names for labeling loaded MAVE experiment csvs.
 CSV_RID_CNAME: Final = "seq_id"
@@ -501,7 +505,13 @@ def _get_data_frames(
 #5.Convert experiment_index to int32 tensor -> dataset/experiment ID.
                                                                                             
 def _process_table(
-    frame: pd.DataFrame, feat_type: str, int_encoder: IntEncoder, device: str
+    frame: pd.DataFrame, 
+    feat_type: str, 
+    int_encoder: IntEncoder, 
+    encoder=None,
+    pca_transform=None, 
+    fit_pca: bool = False,
+    pca_fit_method: Literal["fit", "partial_fit"] = "partial_fit", 
 ) -> Tuple[Tensor, Tensor, Tensor, Tuple[str, ...]]:
     """Transform data frame into processed tensors.
 
@@ -532,20 +542,22 @@ def _process_table(
         encoded = int_to_floatonehot(int_encoded, num_classes=len(int_encoder.alphabet))
     elif feat_type == "integer":
         encoded = int_encoded
-    elif feat_type == "t5":
-        from .featurize.t5 import T5EncoderWrapper
-
-        enc = T5EncoderWrapper(
-            integer_encoder=int_encoder, device=device, per_protein=True
-        )
-        encoded = enc.batch_encode(int_encoded).cpu()
-    elif feat_type == "esmc":
-        from .featurize.esmc import ESMCEncoderWrapper
-
-        enc = ESMCEncoderWrapper(
-            integer_encoder=int_encoder, device=device, per_protein=True
-        )
-        encoded = enc.batch_encode(int_encoded).cpu()
+    elif feat_type in ("t5","esmc"):
+        encoded = encoder.batch_encode(int_encoded).cpu()
+    elif feat_type == "t5_pca":
+        encoded = t5_pca_encode(        
+        int_encoded=int_encoded,
+        enc=encoder,
+        pca_transform=pca_transform,
+        fit_pca=fit_pca,
+        pca_fit_method=pca_fit_method)
+    elif feat_type == "esmc_pca":
+        encoded = esmc_pca_encode(        
+        int_encoded=int_encoded,
+        enc=encoder,
+        pca_transform=pca_transform,
+        fit_pca=fit_pca,
+        pca_fit_method=pca_fit_method)
     else:
         raise ValueError("Unknown featurization type: {}".format(feat_type))
 
@@ -573,7 +585,14 @@ def get_datasets(
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
     metadata_cols: Optional[List[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
+    feat_type: Literal["integer", "onehot", "t5", "esmc", "t5_pca", "esmc_pca"] = ...,
+    embedding_batch_size: int = ...,
+    per_protein: bool = ...,
+    flatten: bool = ...,
+    pca_components: int = ...,
+    pca_batch_size: Optional[int] = ...,
+    per_residue: bool = ...,
+    pca_fit_method: Literal["fit", "partial_fit"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -596,7 +615,14 @@ def get_datasets(
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
     metadata_cols: Optional[List[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
+    feat_type: Literal["integer", "onehot", "t5", "esmc", "t5_pca", "esmc_pca"] = ...,
+    embedding_batch_size: int = ...,
+    per_protein: bool = ...,
+    flatten: bool = ...,
+    pca_components: int = ...,
+    pca_batch_size: Optional[int] = ...,
+    per_residue: bool = ...,
+    pca_fit_method: Literal["fit", "partial_fit"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -619,7 +645,14 @@ def get_datasets(
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
     metadata_cols: Optional[List[str]] = ...,
-    feat_type: Literal["integer", "onehot", "t5", "esmc"] = ...,
+    feat_type: Literal["integer", "onehot", "t5", "esmc", "t5_pca", "esmc_pca"] = ...,
+    embedding_batch_size: int = ...,
+    per_protein: bool = ...,
+    flatten: bool = ...,
+    pca_components: int = ...,
+    pca_batch_size: Optional[int] = ...,
+    per_residue: bool = ...,
+    pca_fit_method: Literal["fit", "partial_fit"] = ...,
     graph: bool = ...,
     graph_sequence_window_size: int = ...,
     graph_n_distance_feats: int = ...,
@@ -656,7 +689,14 @@ def get_datasets(  # noqa: C901
     valid_frame: Optional[pd.DataFrame] = None,
     test_frame: Optional[pd.DataFrame] = None,
     metadata_cols: Optional[List[str]] = None,
-    feat_type: Literal["integer", "onehot", "t5", "esmc"] = "integer",
+    feat_type: Literal["integer", "onehot", "t5", "esmc", "t5_pca", "esmc_pca"] = "integer",
+    embedding_batch_size: int = 32,
+    per_protein: bool = True,
+    flatten: bool = True,
+    pca_components: int = 50,
+    pca_batch_size: Optional[int] = None,
+    per_residue: bool = True,
+    pca_fit_method: Literal["fit", "partial_fit"] = "partial_fit",
     graph: bool = False,
     graph_sequence_window_size: int = 10,
     graph_n_distance_feats: int = 10,
@@ -743,11 +783,11 @@ def get_datasets(  # noqa: C901
     returned.
 
     """
-    if feat_type not in ("integer", "onehot", "t5", "esmc"):
+    if feat_type not in ("integer", "onehot", "t5", "esmc", "t5_pca", "esmc_pca"):
         raise ValueError("Only integer, onehot, esmc or t5 featurization is supported.")
 
     if whiten is None:
-        whiten = feat_type in ("t5","esmc")
+        whiten = feat_type in ("t5", "esmc","t5_pca", "esmc_pca")
 
     if whiten:
         post_transform: SKT_protocol = Whiten()
@@ -832,12 +872,48 @@ def get_datasets(  # noqa: C901
     if not set(alpha).issubset(set(enc.alphabet)):
         raise ValueError("Data contains residues not represented fixed alphabet.")
 
+    # Initialize pretrained encoder once
+    encoder = None
+    pca_transform = None
+
+    if feat_type in ("t5", "t5_pca"):
+        encoder = T5EncoderWrapper(
+            integer_encoder=enc, 
+            device=device, 
+            per_protein=per_protein if feat_type == "t5" else False,
+            flatten=flatten if feat_type == "t5" else False,
+            batch_size= embedding_batch_size
+        )
+
+    if feat_type in ("esmc", "esmc_pca"):
+        encoder = ESMCEncoderWrapper(
+            integer_encoder=enc,
+            device=device,
+            per_protein=per_protein if feat_type == "esmc" else False,
+            flatten=flatten if feat_type == "esmc" else False,
+            batch_size=embedding_batch_size
+        )
+
+    # Initialize PCA for T5/ECSMC PCA featurization
+    if feat_type in ("t5_pca", "esmc_pca"):
+        pca_transform = IncrementalPCATransform(
+            n_components=pca_components,
+            per_residue=per_residue,
+            pca_batch_size=pca_batch_size  
+        )
+
     train_encoded, train_signal, train_dset_id, train_sequences = _process_table(
         train_frame,
         feat_type=feat_type,
         int_encoder=enc,
-        device=device,
+        encoder=encoder,
+        pca_transform=pca_transform,
+        fit_pca= True,
+        pca_fit_method=pca_fit_method
     )
+
+    if pca_transform is not None:
+        pca_transform.explained_variance_report()
 
     post_transform.fit(train_encoded)
     train_encoded = post_transform.transform(train_encoded)
@@ -846,7 +922,10 @@ def get_datasets(  # noqa: C901
         valid_frame,
         feat_type=feat_type,
         int_encoder=enc,
-        device=device,
+        encoder=encoder,
+        pca_transform=pca_transform,
+        fit_pca= False,
+        pca_fit_method=pca_fit_method
     )
 
     valid_encoded = post_transform.transform(valid_encoded)
@@ -860,7 +939,10 @@ def get_datasets(  # noqa: C901
             test_frame,
             feat_type=feat_type,
             int_encoder=enc,
-            device=device,
+            encoder=encoder,
+            pca_transform=pca_transform,
+            fit_pca= False,
+            pca_fit_method=pca_fit_method 
         )
         test_encoded = post_transform.transform(test_encoded)
 
